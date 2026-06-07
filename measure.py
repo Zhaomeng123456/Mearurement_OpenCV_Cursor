@@ -15,6 +15,7 @@ class DistanceMeasurer:
         self.detector = cu.create_detector()
         self.points: list[tuple[int, int]] = []
         self.last_distance_mm: float | None = None
+        self.reference_homography: np.ndarray | None = None
         self.window = "Measurement"
 
     def _on_mouse(self, event: int, x: int, y: int, _flags: int, _param) -> None:
@@ -24,8 +25,9 @@ class DistanceMeasurer:
             self.points.clear()
             self.last_distance_mm = None
         self.points.append((x, y))
+        self._recompute_distance()
 
-    def _draw_overlay(self, frame: np.ndarray, board_detected: bool) -> np.ndarray:
+    def _draw_overlay(self, frame: np.ndarray, detection: cu.DetectionResult) -> np.ndarray:
         display = frame.copy()
 
         for i, pt in enumerate(self.points):
@@ -54,34 +56,46 @@ class DistanceMeasurer:
                 2,
             )
 
-        status = "Board OK" if board_detected else "No board"
-        color = (0, 255, 0) if board_detected else (0, 0, 255)
+        if self.reference_homography is not None:
+            status = "Reference LOCKED"
+            color = (0, 255, 0)
+        elif detection.corner_count >= 4:
+            status = "Board READY | press [l] to lock"
+            color = (0, 255, 255)
+        else:
+            status = "Need board lock"
+            color = (0, 0, 255)
         cv2.putText(display, status, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
+        cv2.putText(
+            display,
+            f"markers {detection.marker_count} corners {detection.corner_count}",
+            (10, 60),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.65,
+            (220, 220, 220),
+            2,
+        )
 
-        help_text = "Click 2 points | [r] reset | [q] quit"
-        cv2.putText(display, help_text, (10, frame.shape[0] - 12),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, (200, 200, 200), 1)
+        help_text = "Lock board [l] | unlock [u] | click 2 points | [r] reset | [q] quit"
+        cv2.putText(
+            display,
+            help_text,
+            (10, frame.shape[0] - 12),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            (200, 200, 200),
+            1,
+        )
         return display
 
-    def _try_measure(
-        self,
-        corners: np.ndarray,
-        ids: np.ndarray,
-        camera_matrix: np.ndarray,
-        dist_coeffs: np.ndarray,
-    ) -> None:
-        if len(self.points) != 2:
-            return
-
-        pose = cu.estimate_board_pose(corners, ids, camera_matrix, dist_coeffs)
-        if pose[0] is None:
+    def _recompute_distance(self) -> None:
+        if len(self.points) != 2 or self.reference_homography is None:
             self.last_distance_mm = None
             return
 
-        rvec, tvec = pose
         board_pts = []
         for pt in self.points:
-            mapped = cu.image_point_to_board_plane(pt, camera_matrix, dist_coeffs, rvec, tvec)
+            mapped = cu.map_image_point_to_board(pt, self.reference_homography)
             if mapped is None:
                 self.last_distance_mm = None
                 return
@@ -89,6 +103,25 @@ class DistanceMeasurer:
 
         dist_m = cu.distance_on_board_plane(board_pts[0], board_pts[1])
         self.last_distance_mm = dist_m * 1000.0
+
+    def _lock_reference(self, detection: cu.DetectionResult) -> bool:
+        if detection.corners is None or detection.ids is None:
+            return False
+
+        homography = cu.build_image_to_board_homography(
+            detection.corners, detection.ids, board_size=detection.board_size
+        )
+        if homography is None:
+            return False
+
+        self.reference_homography = homography
+        self._recompute_distance()
+        return True
+
+    def _clear_reference(self) -> None:
+        self.reference_homography = None
+        self.points.clear()
+        self.last_distance_mm = None
 
     def run(self, camera_index: int = config.CAMERA_INDEX) -> None:
         if self.calib is None:
@@ -105,27 +138,27 @@ class DistanceMeasurer:
         cv2.setMouseCallback(self.window, self._on_mouse)
 
         print("测距程序已启动")
-        print("  将标定板平放在待测物体同一平面上")
+        print("  先将标定板放在待测物同一平面，并按 [l] 锁定参考")
+        print("  锁定后可以移走标定板，但相机与被测平面必须保持不动")
         print("  鼠标左键点击两个点测量距离")
-        print("  [r] 清除点位  [q] 退出")
+        print("  [l] 锁定参考  [u] 清除参考  [r] 清除点位  [q] 退出")
 
         while True:
             ret, frame = cap.read()
             if not ret:
                 break
 
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            corners, ids = cu.detect_charuco(gray, self.detector)
-            board_detected = corners is not None
-
             # 畸变矫正
             undistorted = cv2.undistort(frame, camera_matrix, dist_coeffs)
+            gray = cv2.cvtColor(undistorted, cv2.COLOR_BGR2GRAY)
+            detection = cu.detect_charuco_robust(gray, self.detector)
+            corners, ids = detection.corners, detection.ids
+            board_detected = corners is not None
 
             if board_detected:
                 cv2.aruco.drawDetectedCornersCharuco(undistorted, corners, ids, (0, 255, 0))
-                self._try_measure(corners, ids, camera_matrix, dist_coeffs)
 
-            display = self._draw_overlay(undistorted, board_detected)
+            display = self._draw_overlay(undistorted, detection)
             cv2.imshow(self.window, display)
 
             key = cv2.waitKey(1) & 0xFF
@@ -134,6 +167,14 @@ class DistanceMeasurer:
             if key == ord("r"):
                 self.points.clear()
                 self.last_distance_mm = None
+            if key == ord("l"):
+                if self._lock_reference(detection):
+                    print("参考平面已锁定，可移走标定板继续测距")
+                else:
+                    print("当前未检测到足够角点，无法锁定参考")
+            if key == ord("u"):
+                self._clear_reference()
+                print("参考平面已清除，请重新放置标定板并锁定")
 
         cap.release()
         cv2.destroyAllWindows()
