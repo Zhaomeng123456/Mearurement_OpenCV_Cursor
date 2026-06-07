@@ -42,6 +42,7 @@ class MeasurementGUI(tk.Tk):
         self._distance_mm: Optional[float] = None
         self._camera_matrix: Optional[np.ndarray] = None
         self._dist_coeffs: Optional[np.ndarray] = None
+        self._measure_homography: Optional[np.ndarray] = None
 
         self._build_ui()
         self._ensure_board_image()
@@ -119,12 +120,22 @@ class MeasurementGUI(tk.Tk):
             ttk.Button(self.action_frame, text="清除测量点", command=self._reset_measure).pack(
                 fill=tk.X, pady=3
             )
+            ttk.Button(self.action_frame, text="锁定当前参考", command=self._lock_measure_reference).pack(
+                fill=tk.X, pady=3
+            )
+            ttk.Button(self.action_frame, text="清除参考", command=self._clear_measure_reference).pack(
+                fill=tk.X, pady=3
+            )
             ttk.Button(self.action_frame, text="重新加载标定", command=self._load_calibration).pack(
                 fill=tk.X, pady=3
             )
             ttk.Label(
                 self.action_frame,
-                text="在画面中点击两个点进行测距。\n标定板需与待测物在同一平面。",
+                text=(
+                    "先将标定板放入画面并锁定参考平面。\n"
+                    "锁定后可以移走标定板继续测距，\n"
+                    "但相机与被测平面必须保持不动。"
+                ),
                 wraplength=230,
                 justify=tk.LEFT,
             ).pack(anchor=tk.W, pady=6)
@@ -166,13 +177,15 @@ class MeasurementGUI(tk.Tk):
 
     def _load_calibration(self) -> None:
         calib = cu.load_calibration()
+        self._measure_homography = None
+        self._reset_measure()
         if calib is None:
             self._camera_matrix = None
             self._dist_coeffs = None
             self.status_var.set("未标定：请先在「相机标定」中完成标定")
         else:
             self._camera_matrix, self._dist_coeffs = calib
-            self.status_var.set("标定数据已加载，可进行测距")
+            self.status_var.set("标定数据已加载，请先锁定参考平面")
         self._update_info()
 
     def _update_info(self) -> None:
@@ -190,11 +203,17 @@ class MeasurementGUI(tk.Tk):
             det_line = f"标记 {det.marker_count} | 角点 {det.corner_count}"
             if self._camera_matrix is None:
                 self.info_var.set(f"缺少标定文件\n{det_line}")
+                self.status_var.set("未标定：请先在「相机标定」中完成标定")
             else:
                 pts = len(self._measure_points)
-                self.info_var.set(f"已选点数: {pts} / 2\n{det_line}")
-            if det.hint and det.corner_count < 4:
-                self.status_var.set(det.hint.split("\n")[0])
+                ref_line = "参考平面: 已锁定" if self._measure_homography is not None else "参考平面: 未锁定"
+                self.info_var.set(f"{ref_line}\n已选点数: {pts} / 2\n{det_line}")
+                if self._measure_homography is not None:
+                    self.status_var.set("参考平面已锁定，可移走标定板继续测距")
+                elif det.corner_count >= 4:
+                    self.status_var.set("检测到标定板，请点击「锁定当前参考」")
+                else:
+                    self.status_var.set("请先将标定板放入画面，并锁定参考平面")
         else:
             exists = "已生成" if config.BOARD_IMAGE_FILE.exists() else "未生成"
             self.info_var.set(f"标定板图片: {exists}")
@@ -249,9 +268,7 @@ class MeasurementGUI(tk.Tk):
         if mode == "measure":
             if board_ok:
                 cv2.aruco.drawDetectedCornersCharuco(display, corners, ids, (0, 255, 0))
-                if self._camera_matrix is not None:
-                    self._update_distance(corners, ids, detection.board_size)
-            display = self._draw_measure_overlay(display, board_ok)
+            display = self._draw_measure_overlay(display, detection)
         elif mode == "calibrate":
             if board_ok:
                 cv2.aruco.drawDetectedCornersCharuco(display, corners, ids, (0, 255, 0))
@@ -272,7 +289,7 @@ class MeasurementGUI(tk.Tk):
 
         return display
 
-    def _draw_measure_overlay(self, frame: np.ndarray, board_ok: bool) -> np.ndarray:
+    def _draw_measure_overlay(self, frame: np.ndarray, detection: cu.DetectionResult) -> np.ndarray:
         display = frame.copy()
         for i, pt in enumerate(self._measure_points):
             cv2.circle(display, pt, 7, (0, 0, 255), -1)
@@ -303,7 +320,27 @@ class MeasurementGUI(tk.Tk):
         else:
             self.distance_var.set("距离: -- mm")
 
-        self._draw_detection_debug(display, self._last_detection, y=32)
+        if self._measure_homography is not None:
+            status = "Reference LOCKED | board can be removed"
+            color = (0, 255, 0)
+        elif detection.corner_count >= 4:
+            status = "Board READY | click lock reference"
+            color = (0, 255, 255)
+        else:
+            status = "Need board lock before measuring"
+            color = (0, 0, 255)
+
+        debug = f"markers {detection.marker_count} corners {detection.corner_count}"
+        cv2.putText(display, status, (12, 32), cv2.FONT_HERSHEY_SIMPLEX, 0.72, color, 2)
+        cv2.putText(
+            display,
+            debug,
+            (12, 62),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.65,
+            (220, 220, 220),
+            2,
+        )
         return display
 
     def _draw_detection_debug(
@@ -320,28 +357,42 @@ class MeasurementGUI(tk.Tk):
         if not board_ok and detection.hint:
             self.status_var.set(detection.hint.split("\n")[0])
 
-    def _update_distance(
-        self,
-        corners: np.ndarray,
-        ids: np.ndarray,
-        board_size: Tuple[int, int],
-    ) -> None:
-        if len(self._measure_points) != 2 or self._camera_matrix is None:
+    def _lock_measure_reference(self) -> None:
+        if self._camera_matrix is None:
+            messagebox.showwarning("提示", "请先完成相机标定")
             return
 
-        pose = cu.estimate_board_pose(
-            corners, ids, self._camera_matrix, self._dist_coeffs, board_size=board_size
+        detection = self._last_detection
+        if detection.corners is None or detection.ids is None:
+            messagebox.showwarning("提示", "请先将标定板放入画面，再锁定参考平面")
+            return
+
+        homography = cu.build_image_to_board_homography(
+            detection.corners, detection.ids, board_size=detection.board_size
         )
-        if pose[0] is None:
+        if homography is None:
+            messagebox.showwarning("提示", "参考平面锁定失败，请调整标定板位置后重试")
+            return
+
+        self._measure_homography = homography
+        self._recompute_distance_from_reference()
+        self.status_var.set("参考平面已锁定，可移走标定板继续测距")
+        self._update_info()
+
+    def _clear_measure_reference(self) -> None:
+        self._measure_homography = None
+        self._reset_measure()
+        self.status_var.set("参考平面已清除，请重新放置标定板并锁定")
+        self._update_info()
+
+    def _recompute_distance_from_reference(self) -> None:
+        if len(self._measure_points) != 2 or self._measure_homography is None:
             self._distance_mm = None
             return
 
-        rvec, tvec = pose
         board_pts = []
         for pt in self._measure_points:
-            mapped = cu.image_point_to_board_plane(
-                pt, self._camera_matrix, self._dist_coeffs, rvec, tvec
-            )
+            mapped = cu.map_image_point_to_board(pt, self._measure_homography)
             if mapped is None:
                 self._distance_mm = None
                 return
@@ -386,6 +437,9 @@ class MeasurementGUI(tk.Tk):
         if self._camera_matrix is None:
             messagebox.showwarning("提示", "请先完成相机标定")
             return
+        if self._measure_homography is None:
+            messagebox.showwarning("提示", "请先锁定参考平面，再进行测量")
+            return
 
         mapped = self._canvas_to_image(event.x, event.y)
         if mapped is None:
@@ -396,6 +450,7 @@ class MeasurementGUI(tk.Tk):
             self._distance_mm = None
 
         self._measure_points.append(mapped)
+        self._recompute_distance_from_reference()
 
     def _reset_measure(self) -> None:
         self._measure_points.clear()

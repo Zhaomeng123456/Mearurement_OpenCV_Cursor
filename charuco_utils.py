@@ -306,6 +306,50 @@ def estimate_board_pose(
     return rvec, tvec
 
 
+def build_image_to_board_homography(
+    charuco_corners: np.ndarray,
+    charuco_ids: np.ndarray,
+    board_size: Optional[Tuple[int, int]] = None,
+) -> np.ndarray | None:
+    """
+    根据检测到的 ChArUco 角点，构建图像像素坐标到标定板平面坐标的单应矩阵。
+
+    该映射适用于相机、被测平面和场景保持不动的情况。锁定一次参考后，
+    后续可以在没有标定板出现在画面中的情况下继续进行平面测量。
+    """
+    matched = match_board_points(charuco_corners, charuco_ids, board_size=board_size)
+    if matched is None:
+        return None
+
+    obj_pts, img_pts = matched
+    if len(obj_pts) < 4 or len(img_pts) < 4:
+        return None
+
+    img_xy = np.asarray(img_pts, dtype=np.float32).reshape(-1, 2)
+    obj_xy = np.asarray(obj_pts, dtype=np.float32).reshape(-1, 3)[:, :2]
+    homography, _ = cv2.findHomography(img_xy, obj_xy, method=0)
+    return homography
+
+
+def map_image_point_to_board(
+    point: tuple[float, float],
+    homography: np.ndarray,
+) -> np.ndarray | None:
+    """使用已锁定的单应矩阵，将图像点映射到标定板平面坐标。"""
+    if homography is None:
+        return None
+
+    src = np.array([[[float(point[0]), float(point[1])]]], dtype=np.float32)
+    mapped = cv2.perspectiveTransform(src, homography)
+    if mapped is None:
+        return None
+
+    result = mapped[0, 0].astype(np.float64)
+    if not np.isfinite(result).all():
+        return None
+    return result
+
+
 def image_point_to_board_plane(
     point: tuple[float, float],
     camera_matrix: np.ndarray,
