@@ -1,0 +1,2 @@
+# Mearurement_OpenCV_Cursor
+测试用Cursor的AI编程，目标是进行标定再测量
