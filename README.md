@@ -35,8 +35,9 @@
   - 相机标定结果保存与加载
   - 位姿估计与图像点反投影到板平面
 - 独立标定板生成器
-  - 位于 `CreatChArUcoboard/`
-  - 支持预览并导出 PNG / PDF 标定板
+  - 位于 `board_generator.py` / `board_gui.py`，也可通过 `CreatChArUcoboard/main.py` 独立运行
+  - 支持参数调节、预览并导出 PNG / PDF 标定板
+  - 主 GUI「标定板工具」中可打开生成器子窗口
 
 ## 项目结构
 
@@ -48,12 +49,14 @@
 ├── calibrate.py                 # 命令行标定流程
 ├── measure.py                   # 命令行测距流程
 ├── charuco_utils.py             # ChArUco 检测、标定与测量工具
+├── board_generator.py           # 标定板生成与导出（纯函数）
+├── board_gui.py                 # 标定板生成器 GUI
 ├── camera.py                    # 相机抽象层（Basler / OpenCV）
 ├── config.py                    # 项目配置
 ├── requirements.txt             # 主项目依赖
 └── CreatChArUcoboard/
-    ├── main.py                  # 独立标定板生成器 GUI
-    └── requirements.txt         # 生成器依赖
+    ├── main.py                  # 独立标定板生成器入口
+    └── requirements.txt         # 生成器依赖（与主项目相同）
 ```
 
 ## 运行环境
@@ -101,9 +104,13 @@ python main.py cameras
 
 ### 4. 独立标定板生成器（可选）
 
+主项目已包含标定板生成模块，通常无需单独安装依赖。若仅使用独立入口，可执行：
+
 ```bash
 pip install -r CreatChArUcoboard/requirements.txt
 ```
+
+（依赖与主项目 `requirements.txt` 基本一致，不含 `pypylon`。）
 
 ## 快速开始
 
@@ -135,19 +142,36 @@ python main.py gui
 
 - 距离测量
 - 相机标定
-- 标定板工具
+- 标定板工具（打开生成器子窗口，调节参数、预览、导出 PDF/PNG）
 
 ### 2. 生成标定板
+
+**方式一：图形界面**
+
+1. 启动 `python main.py`
+2. 切换到「标定板工具」
+3. 点击「打开标定板生成器」
+4. 在子窗口中调节参数、预览，并保存 PDF 或 PNG
+
+再次点击「打开标定板生成器」会聚焦已有窗口，不会重复打开。
+
+**方式二：命令行（按 config.py 默认参数）**
 
 ```bash
 python main.py board
 ```
 
-程序会在项目根目录生成：
+**方式三：独立生成器窗口**
+
+```bash
+python CreatChArUcoboard/main.py
+```
+
+程序会在项目根目录生成（或通过生成器保存）：
 
 - `charuco_board.png`
 
-建议将该图片按实际尺寸打印，并贴在平整硬板上使用。
+建议将该图片按实际尺寸打印，并贴在平整硬板上使用。**用于标定/测距的参数须与 `config.py` 一致**；若生成器中的参数与配置不同，保存时会弹出警告。
 
 ### 3. 进行相机标定
 
@@ -263,18 +287,28 @@ python main.py --help     # 查看帮助
 
 ## 独立标定板生成器
 
-`CreatChArUcoboard/` 目录下包含一个独立 GUI 工具，用于：
+标定板生成逻辑位于 [`board_generator.py`](board_generator.py) 与 [`board_gui.py`](board_gui.py)，支持：
 
-- 选择不同 ArUco 字典
-- 自定义板尺寸和格子数量
-- 预览标定板
-- 导出 PNG
-- 导出 PDF
+- 选择 17 种 OpenCV ArUco 字典
+- 自定义网格数量与方格/标记尺寸（mm）
+- 实时预览标定板
+- 导出带说明文字的 PNG
+- 导出 PDF（A4 / Letter / A3 / A2）
+- 保存到项目默认路径 `charuco_board.png`
+- 默认值从 `config.py` 读取；参数与配置不一致时保存前会警告
 
-运行方式：
+**从主 GUI 打开：** 标定板工具 → 打开标定板生成器
+
+**独立运行：**
 
 ```bash
 python CreatChArUcoboard/main.py
+```
+
+或从项目根目录：
+
+```bash
+python -c "from board_gui import open_board_generator; open_board_generator()"
 ```
 
 ## 注意事项

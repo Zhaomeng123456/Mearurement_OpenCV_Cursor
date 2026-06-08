@@ -58,15 +58,28 @@ class BaslerCamera:
         if device is None:
             return
 
-        self._camera = pylon.InstantCamera(tl_factory.CreateDevice(device))
-        self._camera.Open()
-        self._configure()
-        self._camera.StartGrabbing(pylon.GrabStrategy_LatestImageOnly)
+        try:
+            self._camera = pylon.InstantCamera(tl_factory.CreateDevice(device))
+            self._camera.Open()
+            self._configure()
+            self._camera.StartGrabbing(pylon.GrabStrategy_LatestImageOnly)
 
-        self._converter = pylon.ImageFormatConverter()
-        self._converter.OutputPixelFormat = pylon.PixelType_BGR8packed
-        self._converter.OutputBitAlignment = pylon.OutputBitAlignment_MsbAligned
-        self._opened = True
+            self._converter = pylon.ImageFormatConverter()
+            self._converter.OutputPixelFormat = pylon.PixelType_BGR8packed
+            self._converter.OutputBitAlignment = pylon.OutputBitAlignment_MsbAligned
+            self._opened = True
+        except Exception:
+            if self._camera is not None:
+                try:
+                    if self._camera.IsGrabbing():
+                        self._camera.StopGrabbing()
+                    if self._camera.IsOpen():
+                        self._camera.Close()
+                except Exception:
+                    pass
+            self._camera = None
+            self._converter = None
+            self._opened = False
 
     def _find_device(self, tl_factory) -> object | None:
         devices = tl_factory.EnumerateDevices()
@@ -82,10 +95,14 @@ class BaslerCamera:
                 return device
         return None
 
+    def _is_writable(self, node) -> bool:
+        from pypylon import genicam
+
+        return genicam.IsWritable(node)
+
     def _configure(self) -> None:
         assert self._camera is not None
         camera = self._camera
-        pylon = self._pylon
 
         if config.BASLER_WIDTH is not None:
             camera.Width.SetValue(config.BASLER_WIDTH)
@@ -93,28 +110,28 @@ class BaslerCamera:
             camera.Height.SetValue(config.BASLER_HEIGHT)
 
         pixel_format = config.BASLER_PIXEL_FORMAT
-        if pixel_format and camera.PixelFormat.IsWritable():
+        if pixel_format and self._is_writable(camera.PixelFormat):
             try:
                 camera.PixelFormat.SetValue(pixel_format)
             except Exception:
                 pass
 
         if config.BASLER_EXPOSURE_AUTO:
-            if camera.ExposureAuto.IsWritable():
+            if self._is_writable(camera.ExposureAuto):
                 camera.ExposureAuto.SetValue(config.BASLER_EXPOSURE_AUTO)
         elif config.BASLER_EXPOSURE_TIME_US is not None:
-            if camera.ExposureAuto.IsWritable():
+            if self._is_writable(camera.ExposureAuto):
                 camera.ExposureAuto.SetValue("Off")
-            if camera.ExposureTime.IsWritable():
+            if self._is_writable(camera.ExposureTime):
                 camera.ExposureTime.SetValue(float(config.BASLER_EXPOSURE_TIME_US))
 
-        if config.BASLER_GAIN is not None and camera.Gain.IsWritable():
+        if config.BASLER_GAIN is not None and self._is_writable(camera.Gain):
             camera.Gain.SetValue(float(config.BASLER_GAIN))
 
         if config.BASLER_FRAME_RATE is not None and hasattr(camera, "AcquisitionFrameRateEnable"):
-            if camera.AcquisitionFrameRateEnable.IsWritable():
+            if self._is_writable(camera.AcquisitionFrameRateEnable):
                 camera.AcquisitionFrameRateEnable.SetValue(True)
-            if camera.AcquisitionFrameRate.IsWritable():
+            if self._is_writable(camera.AcquisitionFrameRate):
                 camera.AcquisitionFrameRate.SetValue(float(config.BASLER_FRAME_RATE))
 
     def read(self) -> tuple[bool, np.ndarray | None]:

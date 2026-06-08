@@ -9,6 +9,7 @@ import cv2
 import numpy as np
 
 import config
+import board_params as bp
 
 
 @dataclass
@@ -17,24 +18,33 @@ class DetectionResult:
     ids: Optional[np.ndarray]
     marker_count: int = 0
     corner_count: int = 0
-    board_size: Tuple[int, int] = (config.SQUARES_X, config.SQUARES_Y)
+    board_size: Tuple[int, int] = (0, 0)
     hint: str = ""
 
+    def __post_init__(self) -> None:
+        if self.board_size == (0, 0):
+            params = bp.get()
+            self.board_size = (params.squares_x, params.squares_y)
 
-def get_aruco_dict() -> cv2.aruco.Dictionary:
-    dict_id = getattr(cv2.aruco, config.ARUCO_DICT)
+
+def get_aruco_dict(dict_name: str | None = None) -> cv2.aruco.Dictionary:
+    name = dict_name or bp.get().aruco_dict
+    dict_id = getattr(cv2.aruco, name)
     return cv2.aruco.getPredefinedDictionary(dict_id)
 
 
 def create_board(
-    squares_x: int = config.SQUARES_X,
-    squares_y: int = config.SQUARES_Y,
+    squares_x: int | None = None,
+    squares_y: int | None = None,
 ) -> cv2.aruco.CharucoBoard:
+    params = bp.get()
+    sx = squares_x if squares_x is not None else params.squares_x
+    sy = squares_y if squares_y is not None else params.squares_y
     return cv2.aruco.CharucoBoard(
-        (squares_x, squares_y),
-        config.SQUARE_LENGTH,
-        config.MARKER_LENGTH,
-        get_aruco_dict(),
+        (sx, sy),
+        params.square_length_m,
+        params.marker_length_m,
+        get_aruco_dict(params.aruco_dict),
     )
 
 
@@ -104,25 +114,14 @@ def open_camera(index: int = config.CAMERA_INDEX):
     return _open_camera(index)
 
 
-def _meters_to_pixels(length_m: float, dpi: int) -> int:
-    """将物理长度（米）转换为打印像素。"""
-    inches = length_m / 0.0254
-    return max(1, int(inches * dpi))
-
-
 def save_board_image(path=None, dpi: int = 300) -> None:
     """生成可打印的 ChArUco 标定板图像"""
+    from board_generator import generate_board_from_active
+
     path = path or config.BOARD_IMAGE_FILE
-    board = create_board()
-    margin_px = int(0.05 * dpi)
-    size = (
-        _meters_to_pixels(config.SQUARES_X * config.SQUARE_LENGTH, dpi),
-        _meters_to_pixels(config.SQUARES_Y * config.SQUARE_LENGTH, dpi),
-    )
-    img = np.zeros((size[1], size[0]), dtype=np.uint8)
-    board.generateImage(size, img, marginSize=margin_px, borderBits=1)
-    cv2.imwrite(str(path), img)
-    print(f"标定板已保存: {path} ({size[0]}x{size[1]} px)")
+    board_img, _ = generate_board_from_active(dpi=dpi)
+    cv2.imwrite(str(path), board_img)
+    print(f"标定板已保存: {path} ({board_img.shape[1]}x{board_img.shape[0]} px)")
 
 
 def _scale_corners_back(
@@ -162,16 +161,19 @@ def detect_charuco_robust(
     detector: cv2.aruco.CharucoDetector | None = None,
 ) -> DetectionResult:
     """多策略检测 ChArUco 板，并返回调试信息。"""
-    best = DetectionResult(None, None, 0, 0, (config.SQUARES_X, config.SQUARES_Y), "")
+    params = bp.get()
+    best = DetectionResult(None, None, 0, 0, (params.squares_x, params.squares_y), "")
     board_sizes = [
-        (config.SQUARES_X, config.SQUARES_Y),
-        (config.SQUARES_Y, config.SQUARES_X),
+        (params.squares_x, params.squares_y),
+        (params.squares_y, params.squares_x),
     ]
 
     for squares_x, squares_y in board_sizes:
         board = create_board(squares_x, squares_y)
         current_detector = detector if (
-            detector is not None and squares_x == config.SQUARES_X and squares_y == config.SQUARES_Y
+            detector is not None
+            and squares_x == params.squares_x
+            and squares_y == params.squares_y
         ) else create_detector(board)
 
         max_markers = 0
@@ -203,8 +205,9 @@ def detect_charuco_robust(
 
 
 def _build_detection_hint(result: DetectionResult) -> str:
+    params = bp.get()
     if result.corner_count >= 4:
-        if result.board_size != (config.SQUARES_X, config.SQUARES_Y):
+        if result.board_size != (params.squares_x, params.squares_y):
             return "已识别（检测到旋转方向不同的标定板，请按程序生成的方向打印）"
         return "标定板识别正常"
 

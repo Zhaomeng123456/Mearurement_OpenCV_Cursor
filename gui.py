@@ -12,6 +12,9 @@ from PIL import Image, ImageTk
 
 import config
 import charuco_utils as cu
+import board_params as bp
+import board_generator as bg
+from board_gui import open_board_generator
 
 
 class MeasurementGUI(tk.Tk):
@@ -86,6 +89,9 @@ class MeasurementGUI(tk.Tk):
             anchor=tk.W, pady=4
         )
 
+        self.board_params_frame = ttk.LabelFrame(left, text="标定板参数", padding=6)
+        self._build_board_params_controls(self.board_params_frame)
+
         ttk.Separator(left).pack(fill=tk.X, pady=12)
         self.action_frame = ttk.Frame(left)
         self.action_frame.pack(fill=tk.X)
@@ -110,6 +116,106 @@ class MeasurementGUI(tk.Tk):
         ).pack(pady=(8, 0))
 
         self._rebuild_actions()
+        self._toggle_board_params_panel()
+
+    def _build_board_params_controls(self, parent: ttk.LabelFrame) -> None:
+        params = bp.get()
+        row = 0
+
+        ttk.Label(parent, text="字典:").grid(row=row, column=0, sticky="w", pady=2)
+        self.bp_dict_var = tk.StringVar(value=params.aruco_dict)
+        ttk.Combobox(
+            parent,
+            textvariable=self.bp_dict_var,
+            values=list(bg.ARUCO_DICTS.keys()),
+            state="readonly",
+            width=18,
+        ).grid(row=row, column=1, sticky="ew", pady=2)
+        row += 1
+
+        ttk.Label(parent, text="方格 X:").grid(row=row, column=0, sticky="w", pady=2)
+        self.bp_x_var = tk.IntVar(value=params.squares_x)
+        ttk.Spinbox(parent, from_=2, to=20, textvariable=self.bp_x_var, width=8).grid(
+            row=row, column=1, sticky="w", pady=2
+        )
+        row += 1
+
+        ttk.Label(parent, text="方格 Y:").grid(row=row, column=0, sticky="w", pady=2)
+        self.bp_y_var = tk.IntVar(value=params.squares_y)
+        ttk.Spinbox(parent, from_=2, to=20, textvariable=self.bp_y_var, width=8).grid(
+            row=row, column=1, sticky="w", pady=2
+        )
+        row += 1
+
+        ttk.Label(parent, text="方格 (mm):").grid(row=row, column=0, sticky="w", pady=2)
+        self.bp_sq_var = tk.DoubleVar(value=params.square_length_mm)
+        ttk.Spinbox(
+            parent, from_=5.0, to=200.0, increment=1.0, textvariable=self.bp_sq_var, width=8
+        ).grid(row=row, column=1, sticky="w", pady=2)
+        row += 1
+
+        ttk.Label(parent, text="标记 (mm):").grid(row=row, column=0, sticky="w", pady=2)
+        self.bp_mk_var = tk.DoubleVar(value=params.marker_length_mm)
+        ttk.Spinbox(
+            parent, from_=2.0, to=190.0, increment=1.0, textvariable=self.bp_mk_var, width=8
+        ).grid(row=row, column=1, sticky="w", pady=2)
+        row += 1
+
+        ttk.Button(parent, text="应用参数", command=self._apply_board_params_from_ui).grid(
+            row=row, column=0, columnspan=2, sticky="ew", pady=(6, 0)
+        )
+        parent.columnconfigure(1, weight=1)
+
+    def _load_board_params_ui(self) -> None:
+        params = bp.get()
+        self.bp_dict_var.set(params.aruco_dict)
+        self.bp_x_var.set(params.squares_x)
+        self.bp_y_var.set(params.squares_y)
+        self.bp_sq_var.set(params.square_length_mm)
+        self.bp_mk_var.set(params.marker_length_mm)
+
+    def _apply_board_params_from_ui(self) -> None:
+        sq_len = float(self.bp_sq_var.get())
+        mk_len = float(self.bp_mk_var.get())
+        if mk_len >= sq_len:
+            messagebox.showwarning("无效尺寸", "标记边长必须小于方格边长。")
+            return
+
+        bp.update(
+            bp.from_mm_values(
+                self.bp_x_var.get(),
+                self.bp_y_var.get(),
+                sq_len,
+                mk_len,
+                self.bp_dict_var.get(),
+            )
+        )
+        self._on_board_params_changed(show_message=True)
+
+    def _refresh_board_detector(self) -> None:
+        self.detector = cu.create_detector()
+        self._last_detection = cu.DetectionResult(None, None)
+        self._measure_homography = None
+        self._reset_measure()
+
+    def _on_board_params_changed(self, show_message: bool = False) -> None:
+        self._load_board_params_ui()
+        if self._calib_obj_points:
+            self._clear_calib_frames()
+            self.status_var.set("标定板参数已更新，已清空标定帧，请重新采集")
+        else:
+            self.status_var.set("标定板参数已更新")
+        self._refresh_board_detector()
+        self._update_info()
+        if show_message:
+            messagebox.showinfo("完成", "标定板参数已应用到标定/测距模块。")
+
+    def _toggle_board_params_panel(self) -> None:
+        if self.mode.get() in ("calibrate", "board"):
+            self.board_params_frame.pack(fill=tk.X, pady=(0, 8))
+            self._load_board_params_ui()
+        else:
+            self.board_params_frame.pack_forget()
 
     def _rebuild_actions(self) -> None:
         for child in self.action_frame.winfo_children():
@@ -156,20 +262,24 @@ class MeasurementGUI(tk.Tk):
                 justify=tk.LEFT,
             ).pack(anchor=tk.W, pady=6)
         else:
-            ttk.Button(self.action_frame, text="生成标定板图片", command=self._generate_board).pack(
-                fill=tk.X, pady=3
-            )
+            ttk.Button(
+                self.action_frame, text="打开标定板生成器", command=self._open_board_generator
+            ).pack(fill=tk.X, pady=3)
             ttk.Button(self.action_frame, text="打开标定板目录", command=self._open_board_folder).pack(
                 fill=tk.X, pady=3
             )
             ttk.Label(
                 self.action_frame,
-                text="打印 charuco_board.png 后，\n按实际尺寸贴平硬板使用。",
+                text=(
+                    "在生成器中调节参数、预览标定板，\n"
+                    "保存 PDF/PNG 时会自动同步到左侧标定参数。"
+                ),
                 wraplength=230,
                 justify=tk.LEFT,
             ).pack(anchor=tk.W, pady=6)
 
     def _on_mode_change(self) -> None:
+        self._toggle_board_params_panel()
         self._rebuild_actions()
         if self.mode.get() == "measure":
             self._load_calibration()
@@ -194,6 +304,7 @@ class MeasurementGUI(tk.Tk):
             det = self._last_detection
             self.info_var.set(
                 f"已采集: {len(self._calib_obj_points)} / {config.CALIBRATION_MIN_FRAMES} 帧\n"
+                f"{bp.get().summary()}\n"
                 f"标记 {det.marker_count} | 角点 {det.corner_count}"
             )
             if det.hint and det.corner_count < 4:
@@ -201,13 +312,14 @@ class MeasurementGUI(tk.Tk):
         elif mode == "measure":
             det = self._last_detection
             det_line = f"标记 {det.marker_count} | 角点 {det.corner_count}"
+            params_line = bp.get().summary()
             if self._camera_matrix is None:
-                self.info_var.set(f"缺少标定文件\n{det_line}")
+                self.info_var.set(f"缺少标定文件\n{params_line}\n{det_line}")
                 self.status_var.set("未标定：请先在「相机标定」中完成标定")
             else:
                 pts = len(self._measure_points)
                 ref_line = "参考平面: 已锁定" if self._measure_homography is not None else "参考平面: 未锁定"
-                self.info_var.set(f"{ref_line}\n已选点数: {pts} / 2\n{det_line}")
+                self.info_var.set(f"{ref_line}\n{params_line}\n已选点数: {pts} / 2\n{det_line}")
                 if self._measure_homography is not None:
                     self.status_var.set("参考平面已锁定，可移走标定板继续测距")
                 elif det.corner_count >= 4:
@@ -216,7 +328,7 @@ class MeasurementGUI(tk.Tk):
                     self.status_var.set("请先将标定板放入画面，并锁定参考平面")
         else:
             exists = "已生成" if config.BOARD_IMAGE_FILE.exists() else "未生成"
-            self.info_var.set(f"标定板图片: {exists}")
+            self.info_var.set(f"标定板图片: {exists}\n{bp.get().summary()}")
 
     def _ensure_board_image(self) -> None:
         if not config.BOARD_IMAGE_FILE.exists():
@@ -234,7 +346,8 @@ class MeasurementGUI(tk.Tk):
                 "无法打开 Basler 相机，请确认：\n"
                 "1) 已安装 Basler Pylon 驱动与 pypylon\n"
                 "2) 相机已连接并被 Pylon Viewer 识别\n"
-                "3) config.py 中 BASLER_SERIAL_NUMBER 配置正确"
+                "3) config.py 中 BASLER_SERIAL_NUMBER 配置正确\n"
+                "4) 关闭 Pylon Viewer 或其他占用相机的程序后重试"
                 if config.CAMERA_TYPE.lower() == "basler"
                 else "无法打开摄像头，请检查设备或修改 config.py 中的 CAMERA_INDEX"
             )
@@ -526,14 +639,8 @@ class MeasurementGUI(tk.Tk):
         except ValueError as exc:
             messagebox.showerror("标定失败", str(exc))
 
-    def _generate_board(self) -> None:
-        try:
-            cu.save_board_image()
-            self.status_var.set(f"标定板已保存: {config.BOARD_IMAGE_FILE.name}")
-            messagebox.showinfo("完成", f"标定板图片已生成:\n{config.BOARD_IMAGE_FILE}")
-            self._update_info()
-        except Exception as exc:
-            messagebox.showerror("错误", f"生成失败: {exc}")
+    def _open_board_generator(self) -> None:
+        open_board_generator(self, on_params_changed=self._on_board_params_changed)
 
     def _open_board_folder(self) -> None:
         import os
