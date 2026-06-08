@@ -97,16 +97,11 @@ def preprocess_for_detection(gray: np.ndarray) -> list[tuple[np.ndarray, float]]
     return unique
 
 
-def open_camera(index: int = config.CAMERA_INDEX) -> cv2.VideoCapture:
-    backend = getattr(cv2, f"CAP_{config.CAMERA_BACKEND}", cv2.CAP_ANY)
-    cap = cv2.VideoCapture(index, backend)
-    if not cap.isOpened():
-        cap = cv2.VideoCapture(index)
-    if cap.isOpened():
-        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-    return cap
+def open_camera(index: int = config.CAMERA_INDEX):
+    """打开相机（Basler 工业相机或 OpenCV USB 摄像头，由 config.CAMERA_TYPE 决定）。"""
+    from camera import open_camera as _open_camera
+
+    return _open_camera(index)
 
 
 def _meters_to_pixels(length_m: float, dpi: int) -> int:

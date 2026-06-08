@@ -129,9 +129,9 @@ class DistanceMeasurer:
             return
 
         camera_matrix, dist_coeffs = self.calib
-        cap = cv2.VideoCapture(camera_index)
+        cap = cu.open_camera(camera_index)
         if not cap.isOpened():
-            print("无法打开摄像头")
+            print("无法打开相机，请检查 Basler 连接或 config.py 中的相机配置")
             return
 
         cv2.namedWindow(self.window)
