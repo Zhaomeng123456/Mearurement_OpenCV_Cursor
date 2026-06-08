@@ -24,7 +24,7 @@ class MeasurementGUI(tk.Tk):
         self.geometry("1200x720")
         self.minsize(1000, 640)
 
-        self.cap: Optional[cv2.VideoCapture] = None
+        self.cap = None
         self.detector = cu.create_detector()
         self._last_detection = cu.DetectionResult(None, None)
         self.mode = tk.StringVar(value="measure")
@@ -75,7 +75,7 @@ class MeasurementGUI(tk.Tk):
 
         ttk.Separator(left).pack(fill=tk.X, pady=12)
 
-        self.status_var = tk.StringVar(value="正在启动摄像头...")
+        self.status_var = tk.StringVar(value="正在启动相机...")
         ttk.Label(left, text="状态", font=("Microsoft YaHei UI", 10, "bold")).pack(anchor=tk.W)
         ttk.Label(left, textvariable=self.status_var, wraplength=230, justify=tk.LEFT).pack(
             anchor=tk.W, pady=4
@@ -229,8 +229,16 @@ class MeasurementGUI(tk.Tk):
     def _start_camera(self) -> None:
         self.cap = cu.open_camera(config.CAMERA_INDEX)
         if not self.cap.isOpened():
-            self.status_var.set("无法打开摄像头，请检查连接")
-            messagebox.showerror("错误", "无法打开摄像头，请检查设备或修改 config.py 中的 CAMERA_INDEX")
+            self.status_var.set("无法打开相机，请检查连接")
+            hint = (
+                "无法打开 Basler 相机，请确认：\n"
+                "1) 已安装 Basler Pylon 驱动与 pypylon\n"
+                "2) 相机已连接并被 Pylon Viewer 识别\n"
+                "3) config.py 中 BASLER_SERIAL_NUMBER 配置正确"
+                if config.CAMERA_TYPE.lower() == "basler"
+                else "无法打开摄像头，请检查设备或修改 config.py 中的 CAMERA_INDEX"
+            )
+            messagebox.showerror("错误", hint)
             return
         self._update_frame()
 
@@ -462,7 +470,7 @@ class MeasurementGUI(tk.Tk):
             return
         ret, frame = self.cap.read()
         if not ret:
-            messagebox.showerror("错误", "无法读取摄像头画面")
+            messagebox.showerror("错误", "无法读取相机画面")
             return
 
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -499,7 +507,7 @@ class MeasurementGUI(tk.Tk):
 
         ret, frame = self.cap.read()
         if not ret:
-            messagebox.showerror("错误", "无法读取摄像头画面")
+            messagebox.showerror("错误", "无法读取相机画面")
             return
 
         image_size = (frame.shape[1], frame.shape[0])

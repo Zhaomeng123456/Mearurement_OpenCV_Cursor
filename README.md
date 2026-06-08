@@ -12,12 +12,12 @@
 - 通过图形界面完成标定、测量和标定板生成
 - 通过命令行快速执行常见功能
 
-项目默认基于单目摄像头工作，测量结果依赖于标定质量，以及待测点与标定板是否处于同一平面。
+项目默认使用 **Basler 工业相机**（通过 pypylon），也支持切换回普通 USB 摄像头。测量结果依赖于标定质量，以及待测点与标定板是否处于同一平面。
 
 ## 主要功能
 
 - 图形界面模式
-  - 实时预览摄像头画面
+  - 实时预览相机画面（Basler 工业相机 / USB 摄像头）
   - 切换距离测量 / 相机标定 / 标定板工具
   - 点击画面中的两个点进行平面距离测量
 - 命令行模式
@@ -43,6 +43,7 @@
 ├── calibrate.py                 # 命令行标定流程
 ├── measure.py                   # 命令行测距流程
 ├── charuco_utils.py             # ChArUco 检测、标定与测量工具
+├── camera.py                    # 相机抽象层（Basler / OpenCV）
 ├── config.py                    # 项目配置
 ├── requirements.txt             # 主项目依赖
 └── CreatChArUcoboard/
@@ -53,7 +54,8 @@
 ## 运行环境
 
 - Python 3.10 及以上
-- 支持 OpenCV 的本地摄像头
+- Basler 工业相机 + [Basler Pylon SDK](https://www.baslerweb.com/en/downloads/software-downloads/)（默认）
+- 或支持 OpenCV 的本地 USB 摄像头（将 `CAMERA_TYPE` 改为 `"opencv"`）
 - 推荐在 Windows 或 Linux 桌面环境下运行
 
 主项目依赖如下：
@@ -61,6 +63,7 @@
 - `opencv-contrib-python>=4.8.0`
 - `numpy>=1.24.0`
 - `Pillow>=9.0.0`
+- `pypylon>=3.0.0`（Basler 相机）
 
 ## 安装依赖
 
@@ -68,6 +71,14 @@
 
 ```bash
 pip install -r requirements.txt
+```
+
+使用 Basler 相机前，还需安装 Basler Pylon 运行时（与 pypylon 版本匹配），可从 [Basler 官网](https://www.baslerweb.com/en/downloads/software-downloads/) 下载。
+
+连接相机后，可运行以下命令确认设备是否被识别：
+
+```bash
+python main.py cameras
 ```
 
 如果要使用独立标定板生成器，也可以安装其目录下依赖：
@@ -149,6 +160,7 @@ python main.py gui        # 启动图形界面
 python main.py board      # 生成 ChArUco 标定板图片
 python main.py calibrate  # 相机标定（命令行）
 python main.py measure    # 两点测距（命令行）
+python main.py cameras    # 列出 Basler 相机
 python main.py --help     # 查看帮助
 ```
 
@@ -160,8 +172,11 @@ python main.py --help     # 查看帮助
 - `SQUARE_LENGTH`：棋盘格边长，单位米
 - `MARKER_LENGTH`：ArUco 标记边长，单位米
 - `ARUCO_DICT`：ArUco 字典类型
-- `CAMERA_INDEX`：摄像头索引
-- `CAMERA_BACKEND`：摄像头后端
+- `CAMERA_TYPE`：相机类型，`"basler"` 或 `"opencv"`
+- `BASLER_SERIAL_NUMBER`：Basler 相机序列号（留空则连接第一台）
+- `BASLER_EXPOSURE_AUTO` / `BASLER_EXPOSURE_TIME_US`：曝光设置
+- `BASLER_GAIN` / `BASLER_PIXEL_FORMAT`：增益与像素格式
+- `CAMERA_INDEX` / `CAMERA_BACKEND`：USB 摄像头索引与后端（`opencv` 模式）
 - `CALIBRATION_MIN_FRAMES`：最少标定帧数
 
 默认配置为：
@@ -171,7 +186,13 @@ python main.py --help     # 查看帮助
 - 标记边长 30 mm
 - `DICT_6X6_250`
 
-如果摄像头无法打开，可以尝试修改 `CAMERA_INDEX` 为 `1` 或 `2`。
+如果 Basler 相机无法打开：
+
+1. 运行 `python main.py cameras` 查看已连接设备
+2. 在 Pylon Viewer 中确认相机可正常取图
+3. 多台相机时，在 `config.py` 中设置正确的 `BASLER_SERIAL_NUMBER`
+
+如需切换回 USB 摄像头，将 `CAMERA_TYPE` 改为 `"opencv"`，并视情况调整 `CAMERA_INDEX`。
 
 ## 输出文件
 
